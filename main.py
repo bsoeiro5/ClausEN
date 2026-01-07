@@ -19,7 +19,7 @@ TOKEN_SECRET = os.environ.get("MAGENTO_TOKEN_SECRET")
 
 VF_API_KEY = os.environ.get("VF_API_KEY") 
 VF_PROJECT_ID = os.environ.get("VF_PROJECT_ID")
-VF_FILENAME = "claus_catalogo_mestre.txt" 
+VF_FILENAME = "claus_catalogo_mestre_eu_en.txt" 
 
 def clean_html_content(raw_html):
     if not raw_html: return ""
@@ -42,16 +42,13 @@ def check_filters(item, ignore_stock=True):
     if item.get('status') != 1:
         return False, f"Status:Disabled({item.get('status')})"
 
-    # 2. Filtro de Tipo (Apenas Simple Products)
     if item.get('type_id') != 'simple':
         return False, f"Type:{item.get('type_id')}"
     
-    # 3. Filtro de Visibilidade (4 = Catalog, Search)
     visibility = item.get('visibility')
     if str(visibility) != '4':
         return False, f"Vis:{visibility}"
     
-    # 4. Filtro de Stock (Mantido opcional porque a API Staging reporta 0)
     ext_attr = item.get('extension_attributes', {})
     stock_item = ext_attr.get('stock_item', {})
     qty = stock_item.get('qty', 0)
@@ -109,7 +106,6 @@ def process_products_to_structured_text(products):
     rejection_reasons = {}
 
     for p in products:
-        # ATENÇÃO: ignore_stock=True mantido para contornar bug da API Staging
         is_valid, reason = check_filters(p, ignore_stock=True)
         
         if not is_valid:
@@ -128,7 +124,6 @@ def process_products_to_structured_text(products):
         short = clean_html_content(get_custom_attribute(p, 'short_description'))
         ing = clean_html_content(get_custom_attribute(p, 'ingredients'))
         
-        # --- CORREÇÃO UTM IMPLEMENTADA AQUI ---
         if url_key:
             link = f"{STORE_BASE_URL}{url_key}?utm_source=chat&utm_medium=product_chatbot"
         else:
@@ -136,7 +131,8 @@ def process_products_to_structured_text(products):
             
         img_link = f"{MEDIA_BASE_URL}{image}" if image and image != 'no_selection' else "N/A"
 
-        block = f"--- INÍCIO DE PRODUTO ---\nNOME: {name}\nCATEGORIA_OFICIAL: {cat}\nSKU: {sku}\nPREÇO: {price} USD\nLINK: {link}\nIMAGEM: {img_link}\n"
+        # --- MOEDA ALTERADA PARA EUR ---
+        block = f"--- INÍCIO DE PRODUTO ---\nNOME: {name}\nCATEGORIA_OFICIAL: {cat}\nSKU: {sku}\nPREÇO: {price} EUR\nLINK: {link}\nIMAGEM: {img_link}\n"
         if short: block += f"RESUMO: {short}\n"
         if desc: block += f"DESCRIÇÃO: {desc}\n"
         if ing: block += f"\n[DADOS_TECNICOS_INGREDIENTES]: {ing}\n"
