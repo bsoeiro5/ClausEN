@@ -8,9 +8,9 @@ from requests_oauthlib import OAuth1
 from oauthlib.oauth1 import SIGNATURE_HMAC_SHA256
 from bs4 import BeautifulSoup
 
-MAGENTO_BASE_URL = "https://staging-vdt2zeq-5u54sroenlgea.eu-3.magentosite.cloud/rest/V1/products"
-STORE_BASE_URL = "https://staging-vdt2zeq-5u54sroenlgea.eu-3.magentosite.cloud/en/"
-MEDIA_BASE_URL = "https://staging-vdt2zeq-5u54sroenlgea.eu-3.magentosite.cloud/media/catalog/product"
+MAGENTO_BASE_URL = "https://clausporto.com/uk/rest/V1/products"
+STORE_BASE_URL = "https://clausporto.com/uk/" 
+MEDIA_BASE_URL = "https://clausporto.com/media/catalog/product"
 
 CONSUMER_KEY = os.environ.get("MAGENTO_CONSUMER_KEY")
 CONSUMER_SECRET = os.environ.get("MAGENTO_CONSUMER_SECRET")
@@ -18,8 +18,8 @@ ACCESS_TOKEN = os.environ.get("MAGENTO_ACCESS_TOKEN")
 TOKEN_SECRET = os.environ.get("MAGENTO_TOKEN_SECRET")
 
 VF_API_KEY = os.environ.get("VF_API_KEY") 
-VF_PROJECT_ID = os.environ.get("VF_PROJECT_ID")
-VF_FILENAME = "claus_catalogo_mestre_eu_en.txt" 
+VF_PROJECT_ID = os.environ.get("VF_PROJECT_ID_UK")
+VF_FILENAME = "claus_catalogo_uk.txt" 
 
 def clean_html_content(raw_html):
     if not raw_html: return ""
@@ -125,14 +125,13 @@ def process_products_to_structured_text(products):
         ing = clean_html_content(get_custom_attribute(p, 'ingredients'))
         
         if url_key:
-            link = f"{STORE_BASE_URL}{url_key}?utm_source=chat&utm_medium=product_chatbot"
+            link = f"{STORE_BASE_URL}{url_key}?sku={sku}&utm_source=chatbot&utm_medium=product_chatbot"
         else:
             link = "N/A"
             
         img_link = f"{MEDIA_BASE_URL}{image}" if image and image != 'no_selection' else "N/A"
 
-        # --- MOEDA ALTERADA PARA EUR ---
-        block = f"--- INÍCIO DE PRODUTO ---\nNOME: {name}\nCATEGORIA_OFICIAL: {cat}\nSKU: {sku}\nPREÇO: {price} EUR\nLINK: {link}\nIMAGEM: {img_link}\n"
+        block = f"--- INÍCIO DE PRODUTO ---\nNOME: {name}\nCATEGORIA_OFICIAL: {cat}\nPREÇO: {price} GBP\nLINK: {link}\nIMAGEM: {img_link}\n"
         if short: block += f"RESUMO: {short}\n"
         if desc: block += f"DESCRIÇÃO: {desc}\n"
         if ing: block += f"\n[DADOS_TECNICOS_INGREDIENTES]: {ing}\n"
@@ -174,5 +173,5 @@ if __name__ == "__main__":
         if final_text:
             delete_old_documents()
             res = upload_to_voiceflow(final_text)
-            if res and res.status_code == 200: print("SUCESSO: Base de dados atualizada.")
+            if res and res.status_code == 200: print("SUCESSO: Base de dados UK atualizada.")
             else: print(f"ERRO UPLOAD: {res.status_code if res else 'N/A'}")
