@@ -8,11 +8,7 @@ from requests_oauthlib import OAuth1
 from oauthlib.oauth1 import SIGNATURE_HMAC_SHA256
 from bs4 import BeautifulSoup
 
-# Configuração EN
-STORE_VIEW = "en"
-WAREHOUSE = "warehouse_pt"  # EN usa o mesmo warehouse que PT
-MAGENTO_BASE_URL = f"https://clausporto.com/{STORE_VIEW}/rest/V1/products"
-STOCK_BASE_URL = f"https://clausporto.com/index.php/rest/{STORE_VIEW}/V1/inventory/source-items"
+MAGENTO_BASE_URL = "https://clausporto.com/en/rest/V1/products"
 STORE_BASE_URL = "https://clausporto.com/en/" 
 MEDIA_BASE_URL = "https://clausporto.com/media/catalog/product"
 
@@ -42,14 +38,7 @@ def get_custom_attribute(item, code):
             return attribute.get('value')
     return None
 
-def check_filters(item, stock_info=None):
-    """
-    Filtra produtos com base em:
-    - Status ativo
-    - Tipo simple
-    - Visibilidade 4
-    - Stock disponível (se fornecido)
-    """
+def check_filters(item, ignore_stock=True):
     if item.get('status') != 1:
         return False, f"Status:Disabled({item.get('status')})"
     if item.get('type_id') != 'simple':
@@ -57,14 +46,13 @@ def check_filters(item, stock_info=None):
     visibility = item.get('visibility')
     if str(visibility) != '4':
         return False, f"Vis:{visibility}"
-    
-    # Verificar stock se fornecido
-    if stock_info:
-        qty = stock_info.get('quantity', 0)
-        status = stock_info.get('status', 0)
-        if qty <= 0 or status != 1:
-            return False, f"NoStock(Qty:{qty},Status:{status})"
-    
+    ext_attr = item.get('extension_attributes', {})
+    stock_item = ext_attr.get('stock_item', {})
+    qty = stock_item.get('qty', 0)
+    in_stock = stock_item.get('is_in_stock', False)
+    has_stock = qty > 0 and in_stock
+    if not ignore_stock and not has_stock:
+        return False, f"NoStock(Qty:{qty})"
     return True, "OK"
 
 def determine_official_category(name):
@@ -83,13 +71,11 @@ def determine_official_category(name):
         return 'OUTROS (General)'
 
 def fetch_all_products():
-    """Busca todos os produtos da store view EN"""
     oauth = OAuth1(CONSUMER_KEY, client_secret=CONSUMER_SECRET,
                    resource_owner_key=ACCESS_TOKEN, resource_owner_secret=TOKEN_SECRET,
                    signature_method=SIGNATURE_HMAC_SHA256)
     all_products = []
     page, page_size = 1, 100
-    
     while True:
         params = {"searchCriteria[pageSize]": page_size, "searchCriteria[currentPage]": page}
         try:
@@ -102,93 +88,27 @@ def fetch_all_products():
             all_products.extend(items)
             if len(items) < page_size: break
             page += 1
-            time.sleep(0.5)  # Rate limiting
         except Exception as e:
             print(f"ERRO CONEXÃO: {e}")
             break
     return all_products
 
-def fetch_stock_for_skus(sku_list):
-    """
-    Busca informação de stock para uma lista de SKUs
-    Retorna dict {sku: {quantity: X, status: Y, source_code: Z}}
-    """
-    if not sku_list:
-        return {}
-    
-    oauth = OAuth1(CONSUMER_KEY, client_secret=CONSUMER_SECRET,
-                   resource_owner_key=ACCESS_TOKEN, resource_owner_secret=TOKEN_SECRET,
-                   signature_method=SIGNATURE_HMAC_SHA256)
-    
-    # Dividir em chunks de 50 SKUs por pedido
-    chunk_size = 50
-    all_stock_data = {}
-    
-    for i in range(0, len(sku_list), chunk_size):
-        chunk = sku_list[i:i + chunk_size]
-        sku_string = ",".join(chunk)
-        
-        params = {
-            "searchCriteria[filter_groups][0][filters][0][field]": "sku",
-            "searchCriteria[filter_groups][0][filters][0][condition_type]": "in",
-            "searchCriteria[filter_groups][0][filters][0][value]": sku_string
-        }
-        
-        try:
-            response = requests.get(STOCK_BASE_URL, auth=oauth, params=params)
-            if response.status_code != 200:
-                print(f"AVISO: Erro ao buscar stock (status {response.status_code})")
-                continue
-                
-            items = response.json().get('items', [])
-            
-            # Organizar por SKU e filtrar pelo warehouse correto
-            for item in items:
-                sku = item.get('sku')
-                source = item.get('source_code')
-                
-                # EN usa warehouse_pt
-                if source == WAREHOUSE:
-                    all_stock_data[sku] = {
-                        'quantity': item.get('quantity', 0),
-                        'status': item.get('status', 0),
-                        'source_code': source
-                    }
-            
-            time.sleep(0.3)  # Rate limiting
-            
-        except Exception as e:
-            print(f"AVISO: Erro ao processar stock: {e}")
-            continue
-    
-    return all_stock_data
-
-def process_products_to_structured_text(products, stock_data):
-    """
-    Processa produtos e cria texto estruturado incluindo informação de stock
-    """
+def process_products_to_structured_text(products):
     text_content = ""
     valid, skipped = 0, 0
     rejection_reasons = {}
     images_found = 0
-    with_stock = 0
 
     for p in products:
-        sku = p.get('sku', 'N/A')
-        stock_info = stock_data.get(sku)
-        
-        # Aplicar filtros incluindo stock
-        is_valid, reason = check_filters(p, stock_info)
+        is_valid, reason = check_filters(p, ignore_stock=True)
         if not is_valid:
             skipped += 1
             rejection_reasons[reason] = rejection_reasons.get(reason, 0) + 1
             continue
 
         valid += 1
-        if stock_info and stock_info.get('quantity', 0) > 0:
-            with_stock += 1
-            
         name = p.get('name', 'N/A')
+        sku = p.get('sku', 'N/A')
         price = p.get('price', 0)
         cat = determine_official_category(name)
         url_key = get_custom_attribute(p, 'url_key')
@@ -216,25 +136,14 @@ def process_products_to_structured_text(products, stock_data):
         else:
             img_link = "N/A"
 
-        # Informação de stock
-        stock_qty = stock_info.get('quantity', 0) if stock_info else 0
-        stock_status = "EM STOCK" if stock_qty > 0 else "SEM STOCK"
-        
-        block = f"--- INÍCIO DE PRODUTO ---\n"
-        block += f"NOME: {name}\n"
-        block += f"SKU: {sku}\n"
-        block += f"CATEGORIA_OFICIAL: {cat}\n"
-        block += f"PREÇO: {price} EUR\n"
-        block += f"STOCK: {stock_status} (Quantidade: {stock_qty})\n"
-        block += f"LINK: {link}\n"
-        block += f"IMAGEM: {img_link}\n"
+        block = f"--- INÍCIO DE PRODUTO ---\nNOME: {name}\nCATEGORIA_OFICIAL: {cat}\nPREÇO: {price} EUR\nLINK: {link}\nIMAGEM: {img_link}\n"
         if short: block += f"RESUMO: {short}\n"
         if desc: block += f"DESCRIÇÃO: {desc}\n"
         if ing: block += f"\n[DADOS_TECNICOS_INGREDIENTES]: {ing}\n"
         block += "--- FIM DE PRODUTO ---\n\n"
         text_content += block
             
-    print(f" > Resultados: {valid} válidos / {skipped} rejeitados / {with_stock} com stock / {images_found} com imagem.")
+    print(f" > Resultados: {valid} válidos / {skipped} rejeitados / {images_found} com imagem.")
     if skipped > 0:
         print(" > Motivos de rejeição (Top 3):")
         for r, count in sorted(rejection_reasons.items(), key=lambda x: x[1], reverse=True)[:3]:
@@ -267,44 +176,27 @@ if __name__ == "__main__":
         print("ERRO: Variáveis de ambiente em falta.")
         exit(1)
         
-    print(f"========================================")
-    print(f"CLAUS PORTO - Atualização EN (Warehouse: {WAREHOUSE})")
-    print(f"========================================\n")
-    
     print("1. Magento (EN): A carregar produtos...")
     raw = fetch_all_products()
     
-    if not raw:
+    if raw:
+        print(f"   > Sucesso: {len(raw)} produtos carregados.")
+        final_text = process_products_to_structured_text(raw)
+        
+        if final_text:
+            print("2. Voiceflow: A limpar base de dados antiga...")
+            delete_old_documents()
+            
+            print("3. Voiceflow: A enviar nova versão EN...")
+            res = upload_to_voiceflow(final_text)
+            
+            if res and res.status_code == 200: 
+                print("SUCESSO: Base de dados EN atualizada.")
+            else: 
+                print(f"ERRO UPLOAD: {res.status_code if res else 'N/A'}")
+                if res:
+                    print(res.text)
+                exit(1)
+    else:
         print("Erro: Nenhum produto recebido do Magento.")
-        exit(1)
-    
-    print(f"   > Sucesso: {len(raw)} produtos carregados.\n")
-    
-    # Extrair lista de SKUs e buscar stock
-    print("2. Magento: A carregar informação de stock...")
-    all_skus = [p.get('sku') for p in raw if p.get('sku')]
-    print(f"   > A verificar stock para {len(all_skus)} SKUs...")
-    
-    stock_data = fetch_stock_for_skus(all_skus)
-    print(f"   > Stock carregado para {len(stock_data)} produtos do {WAREHOUSE}.\n")
-    
-    print("3. A processar produtos...")
-    final_text = process_products_to_structured_text(raw, stock_data)
-    
-    if not final_text:
-        print("ERRO: Nenhum produto passou nos filtros.")
-        exit(1)
-    
-    print("\n4. Voiceflow: A limpar base de dados antiga...")
-    delete_old_documents()
-    
-    print("\n5. Voiceflow: A enviar nova versão EN...")
-    res = upload_to_voiceflow(final_text)
-    
-    if res and res.status_code == 200: 
-        print("\n✓ SUCESSO: Base de dados EN atualizada com stock!")
-    else: 
-        print(f"\n✗ ERRO UPLOAD: {res.status_code if res else 'N/A'}")
-        if res:
-            print(res.text)
         exit(1)
